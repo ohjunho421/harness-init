@@ -1,0 +1,22 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "harness-init",
+  "owner": {
+    "name": "ohjunho421",
+    "email": ""
+  },
+  "metadata": {
+    "description": "Agentic harness bootstrap - enforced workflow, skill routing, auto review, change tracking",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "harness-init",
+      "source": "./",
+      "description": "Run /harness-init to install mandatory workflow, project hooks, feature docs, and skill routing into any project",
+      "version": "1.0.0",
+      "category": "productivity",
+      "tags": ["harness", "workflow", "agentic", "code-review", "hooks"]
+    }
+  ]
+}

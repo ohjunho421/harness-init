@@ -1,0 +1,446 @@
+---
+name: harness-init
+description: 프로젝트에 강제 하네스를 설치합니다. 구조화된 기능 md 자동생성, 파일확장자 기반 스킬 라우팅, 변경이력 자동기록, 코드리뷰 자동트리거, hooks 리마인더를 포함합니다.
+user-invocable: true
+---
+
+# Harness Init v3 — 완전 자동화 하네스
+
+## 해결하는 5가지 문제
+
+| # | 문제 | 해결 방식 |
+|---|------|-----------|
+| 1 | md를 안 읽음 | 기능별 md를 초기 생성 + 00-INDEX에 매핑 채움 + hooks가 Read 강제 |
+| 2 | 수정 내용 기록 안 함 | 구체적 기록 형식 템플릿 + STEP에서 정확한 기록 위치/포맷 지정 |
+| 3 | md가 Claude 비친화적 | frontmatter + 고정 필드 + 짧은 구조화 블록 |
+| 4 | 스킬/플러그인 안 씀 | 파일 확장자/디렉토리 기반 자동 판단 규칙 |
+| 5 | 리뷰 안 함 | 코드 수정 후 Agent(code-reviewer) 호출을 MUST로 강제 |
+
+---
+
+## Phase 1: 프로젝트 분석
+
+아래를 Glob/Grep/Read로 자동 수집한다:
+
+```
+1. 기술 스택
+   - package.json / Cargo.toml / go.mod / requirements.txt / pyproject.toml
+   - tsconfig.json / vite.config.* / next.config.*
+
+2. 소스 구조
+   - 소스 루트 (src/, client/, server/, app/, lib/)
+   - 테스트 (tests/, __tests__/, spec/, *_test.go)
+   - docs/ 존재 여부
+
+3. 주요 소스 파일 목록
+   - Glob으로 소스 파일 전체 스캔
+   - 파일 확장자별 분류 (.tsx, .ts, .py, .go, .rs 등)
+   - 디렉토리별 기능 그룹 추론 (auth/, api/, components/, pages/ 등)
+
+4. 배포 환경
+   - railway.json, vercel.json, Dockerfile, fly.toml
+   - .github/workflows/
+
+5. 기존 CLAUDE.md / docs/ 확인
+   - 있으면 → 개선 모드 (기존 보존 + 누락 섹션 추가)
+   - 없으면 → 신규 생성
+```
+
+---
+
+## Phase 2: 사용자 인터뷰 (AskUserQuestion)
+
+```
+Q1: 이 프로젝트의 핵심 기능 3-5개
+    (예: "로그인, 결제, 대시보드, 알림")
+
+Q2: 빌드/실행 명령
+    (예: npm run build / python -m pytest / cargo build)
+
+Q3: 절대 보존해야 할 기능이나 주의사항
+```
+
+---
+
+## Phase 3: 파일 생성
+
+> 핵심 원칙:
+> - CLAUDE.md = 모든 강제 지시의 단일 소스. 워크플로우 지시를 docs/로 분리하지 않는다.
+> - docs/features/*.md = 기능별 구조화 문서. harness-init 시 초기 생성한다 (빈 파일 금지).
+> - 모든 md는 frontmatter + 고정 필드 구조로 작성한다.
+
+---
+
+### 생성 파일 1: CLAUDE.md (프로젝트 루트)
+
+```markdown
+# {프로젝트명} — 프로젝트 규칙
+
+## MANDATORY WORKFLOW — 모든 코드 수정에 적용
+
+이 워크플로우는 선택이 아닌 필수다. 어떤 단계도 건너뛸 수 없다.
+
+### STEP 1: 문서 읽기 (코드 수정 전)
+
+코드를 건드리기 전에 반드시 아래를 순서대로 실행한다:
+
+1. `docs/00-INDEX.md`를 Read한다
+2. 요청 키워드로 매핑 테이블에서 관련 문서를 찾는다
+3. 찾은 문서를 Read하여 기존 동작/의도/변경이력을 파악한다
+4. 관련 문서가 없으면:
+   - Grep/Explore로 코드를 탐색한다
+   - 탐색 결과를 바탕으로 `docs/features/{기능명}.md`를 아래 템플릿으로 새로 생성한다
+   - `docs/00-INDEX.md` 매핑 테이블에 행을 추가한다
+
+**금지: 이 단계를 건너뛰고 바로 Edit/Write를 사용하는 행위**
+
+### STEP 2: 계획 (3파일 이상 수정 시)
+
+수정 대상 파일이 3개 이상이면 반드시:
+```
+Skill 도구 호출: skill="ccpp:plan"
+```
+1~2파일이면 직접 진행.
+
+### STEP 3: 구현 — 파일 기반 스킬 자동 호출
+
+수정하는 파일의 확장자와 디렉토리를 확인하고, 아래 조건에 해당하면 반드시 해당 스킬을 먼저 호출한다:
+
+#### 파일 확장자 기반 (MUST)
+
+| 수정 파일 확장자 | 필수 스킬 호출 |
+|-----------------|---------------|
+| `.tsx`, `.jsx`, `.vue`, `.svelte` | `Skill: skill="frontend-design:frontend-design"` |
+| `.css`, `.scss`, `.tailwind` | `Skill: skill="ccpp:tailwind-design-system"` |
+| `.test.ts`, `.test.js`, `.spec.*`, `*_test.*` | `Skill: skill="ccpp:tdd"` |
+
+#### 디렉토리 기반 (MUST)
+
+| 수정 파일 디렉토리 | 필수 스킬 호출 |
+|-------------------|---------------|
+| `auth/`, `login/`, `session/`, `token/` | `Agent: subagent_type="security-reviewer"` |
+| `api/`, `routes/`, `controllers/`, `endpoints/` | `Agent: subagent_type="security-reviewer"` |
+| `components/`, `pages/`, `views/`, `ui/` | `Skill: skill="frontend-design:frontend-design"` |
+
+#### 상황 기반 (MUST)
+
+| 상황 | 필수 액션 |
+|------|----------|
+| 외부 라이브러리 API 사용법이 불확실할 때 | context7 MCP: `mcp__context7__resolve-library-id` → `mcp__context7__query-docs` |
+| 빌드 실패 시 | `Skill: skill="ccpp:build-fix"` |
+
+**금지: 위 조건에 해당하는데 스킬을 호출하지 않는 행위**
+
+### STEP 4: 코드 리뷰 (코드 수정 후, 커밋 전) — MUST
+
+코드를 1줄이라도 수정했으면, 커밋 전에 반드시 아래를 실행한다:
+
+```
+Skill 도구 호출: skill="ccpp:review"
+```
+
+추가로 `docs/code-review-checklist.md`를 Read하여 과거 교훈이 반복되지 않는지 확인한다.
+
+리뷰에서 CRITICAL/HIGH 이슈 → 즉시 수정.
+리뷰에서 MEDIUM 이슈 → 가능하면 수정.
+
+**금지: 리뷰 없이 커밋하는 행위**
+
+### STEP 5: 빌드 확인
+
+```bash
+{프로젝트 빌드 명령}
+```
+
+빌드 실패 시: `Skill: skill="ccpp:build-fix"` 호출
+
+### STEP 6: 문서 기록 (변경이력 필수 작성)
+
+코드를 수정했으면 반드시 아래를 모두 수행한다:
+
+#### 6-1. 기능 문서 업데이트
+
+해당 기능의 `docs/features/{기능명}.md`를 열고:
+- `last_modified` 날짜를 오늘로 변경
+- `files` 목록에 수정된 파일 추가 (없으면)
+- `변경 이력` 테이블에 아래 형식으로 행 추가:
+
+```
+| {오늘 날짜} | {변경 요약 1줄} | {수정된 파일 쉼표 구분} | {왜 변경했는지 1줄} |
+```
+
+#### 6-2. INDEX 업데이트
+
+새 문서를 추가했으면 `docs/00-INDEX.md` 매핑 테이블에 행을 추가한다.
+
+#### 6-3. CLAUDE.md 업데이트
+
+기능 목록/기술 스택/스크립트가 변경되었으면 이 CLAUDE.md의 해당 섹션을 업데이트한다.
+
+#### 6-4. 교훈 기록
+
+리뷰에서 발견된 패턴이나 버그 원인이 있으면 `docs/code-review-checklist.md`의 교훈 테이블에 추가한다.
+
+**금지: 코드만 수정하고 문서를 업데이트하지 않는 행위**
+
+### STEP 7: 커밋
+
+{사용자 커밋 방식}
+
+---
+
+## 절대 규칙: 기존 기능 보존
+
+- 사용자가 명시적으로 요청하지 않는 한, 기존 기능/로직/UI를 제거하지 않는다
+- 수정 전에 영향받는 기능 목록을 먼저 알려주고 확인받는다
+- 새 기능 추가 시에도 기존 기능이 깨지지 않는지 확인한다
+
+## 주요 기능 목록 (삭제 금지)
+
+{사용자 인터뷰 Q1에서 획득한 기능 목록}
+
+## 프로젝트 구조
+
+{자동 감지된 디렉토리 트리}
+
+## 스크립트
+
+```bash
+{package.json scripts 또는 Makefile 등에서 추출}
+```
+
+## 기술 스택
+
+| 분류 | 기술 | 버전 |
+|------|------|------|
+| {자동 감지된 dependencies 기반} | | |
+
+## 배포 환경
+
+{자동 감지 결과}
+
+## 보안 규칙
+
+- 세션/토큰은 httpOnly 쿠키 또는 안전한 저장소로만 관리
+- 모든 사용자 데이터 API에 소유권/권한 확인 필수
+- 비밀번호 해시, API 키 응답에 포함 금지
+- console.log로 민감 정보 출력 금지
+
+## Gotchas (과거 교훈)
+
+{Q3 답변 + 향후 누적}
+```
+
+---
+
+### 생성 파일 2: .claude/settings.json (프로젝트 hooks)
+
+> 프로젝트 루트의 `.claude/settings.json`에 hooks를 설치한다.
+> 이미 존재하면 hooks 키만 추가/병합한다.
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "type": "command",
+        "command": "echo [HARNESS] 필수 워크플로우: 1)docs/00-INDEX.md Read 2)관련 기능 md Read 3)파일확장자 기반 스킬 호출 4)구현 5)Skill ccpp:review 필수 6)빌드 확인 7)기능 md 변경이력 기록. 건너뛰기 금지."
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo [HARNESS-CHECK] 이 파일을 수정하기 전에: 1)docs/00-INDEX.md를 Read했는가? 2)관련 기능 md를 Read했는가? 3)파일 확장자/디렉토리에 맞는 스킬을 호출했는가? 하나라도 안 했으면 먼저 수행하세요."
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo [HARNESS-REMIND] 코드 수정됨. 모든 수정 완료 후 반드시: 1)Skill ccpp:review 호출 2)빌드 명령 실행 3)docs/features/{기능}.md 변경이력 테이블에 기록 추가. 이 3가지를 하지 않으면 작업 미완료."
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+---
+
+### 생성 파일 3: docs/00-INDEX.md
+
+```markdown
+---
+type: index
+last_modified: {오늘 날짜}
+---
+
+# {프로젝트명} 문서 인덱스
+
+> CLAUDE.md STEP 1에 의해 이 파일 읽기는 필수입니다.
+> 코드를 수정하기 전에 이 매핑에서 관련 문서를 찾아 반드시 Read하세요.
+
+## 요청 → 문서 매핑
+
+| 키워드 | 문서 경로 | 설명 |
+|--------|-----------|------|
+| {기능1 키워드} | docs/features/{기능1}.md | {기능1 설명} |
+| {기능2 키워드} | docs/features/{기능2}.md | {기능2 설명} |
+| {기능N 키워드} | docs/features/{기능N}.md | {기능N 설명} |
+| 리뷰, 체크리스트 | docs/code-review-checklist.md | 코드 리뷰 피드백 누적 |
+
+## 카테고리 구조
+
+```
+docs/
+├── 00-INDEX.md                 ← 이 파일
+├── code-review-checklist.md    ← 리뷰 교훈 누적
+└── features/                   ← 기능별 사양 + 변경이력
+    ├── {기능1}.md
+    ├── {기능2}.md
+    └── {기능N}.md
+```
+
+## 새 문서 추가 규칙
+
+1. `docs/features/{기능명}.md`를 기능 md 템플릿으로 생성
+2. 이 INDEX의 매핑 테이블에 행 추가
+3. CLAUDE.md의 기능 목록에도 반영
+```
+
+---
+
+### 생성 파일 4: docs/features/{기능명}.md (기능별 — Q1에서 획득한 기능마다 1개씩)
+
+> Phase 1에서 분석한 코드를 기반으로 각 기능의 초기 문서를 생성한다.
+> 빈 파일 금지 — 최소한 핵심 파일 목록과 1줄 설명은 채운다.
+
+```markdown
+---
+feature: {기능명}
+status: active
+last_modified: {오늘 날짜}
+files:
+  - {이 기능의 핵심 소스 파일 경로 1}
+  - {이 기능의 핵심 소스 파일 경로 2}
+tags: [{관련 키워드 쉼표 구분}]
+---
+
+# {기능명}
+
+## 설명
+
+{Phase 1에서 코드를 읽고 파악한 기능의 1~3줄 설명}
+
+## 핵심 로직
+
+- {핵심 함수/클래스와 역할 1줄씩}
+
+## 주의사항
+
+- {보존해야 할 동작이나 엣지 케이스}
+
+## 변경 이력
+
+| 날짜 | 변경 내용 | 수정 파일 | 이유 |
+|------|-----------|-----------|------|
+| {오늘} | 초기 문서화 | - | harness-init |
+```
+
+> **중요**: 기능 md는 코드를 실제로 읽고 파악한 내용으로 채운다.
+> 추측이나 플레이스홀더로 채우지 않는다.
+> Phase 1에서 수집한 소스 파일을 Read하여 핵심 로직을 정확히 기술한다.
+
+---
+
+### 생성 파일 5: docs/code-review-checklist.md
+
+```markdown
+---
+type: checklist
+last_modified: {오늘 날짜}
+---
+
+# 코드 리뷰 체크리스트
+
+> CLAUDE.md STEP 4에서 ccpp:review 호출 시 이 파일도 함께 Read한다.
+
+## 필수 확인 항목
+
+- [ ] 기존 기능이 깨지지 않았는가 (CLAUDE.md "절대 규칙")
+- [ ] 타입 에러 없는가
+- [ ] 보안 규칙 위반 없는가 (API 키 노출, 권한 체크 누락)
+- [ ] 불필요한 console.log/print 없는가
+- [ ] 에러 핸들링이 적절한가
+- [ ] 아래 "과거 교훈" 패턴이 반복되지 않는가
+
+## 과거 교훈
+
+| 날짜 | 이슈 | 원인 | 교훈 |
+|------|------|------|------|
+| {오늘} | 프로젝트 초기 세팅 | - | 하네스 init 완료 |
+
+> 리뷰에서 발견한 반복 패턴이나 버그 원인을 여기에 추가한다.
+> CLAUDE.md STEP 6-4 참고.
+```
+
+---
+
+## Phase 4: 검증
+
+생성 후 반드시 아래를 확인한다:
+
+1. CLAUDE.md 존재 + "MANDATORY WORKFLOW" 섹션 포함 확인
+2. `.claude/settings.json` 존재 + hooks 3종 (UserPromptSubmit, PreToolUse, PostToolUse) 확인
+3. `docs/00-INDEX.md` 존재 + 매핑 테이블이 비어있지 않은지 확인
+4. `docs/features/*.md`가 Q1에서 받은 기능 수만큼 존재하는지 확인
+5. 각 기능 md의 `files:` 필드가 실제 존재하는 파일을 가리키는지 확인
+6. 빌드 명령 1회 실행하여 동작 확인
+
+---
+
+## Phase 5: 완료 메시지
+
+```
+하네스 v3 세팅 완료!
+
+생성된 파일:
+- CLAUDE.md — 강제 7단계 워크플로우 + 파일확장자 기반 스킬 라우팅
+- .claude/settings.json — 프로젝트 hooks (3종 리마인더)
+- docs/00-INDEX.md — 기능→문서 매핑 (초기 데이터 포함)
+- docs/features/{기능별}.md — 구조화된 기능 문서 (frontmatter + 변경이력)
+- docs/code-review-checklist.md — 리뷰 교훈 누적
+
+강제되는 동작:
+1. 코드 수정 전 → 관련 기능 md를 Read (hooks가 매번 체크)
+2. 파일 확장자/디렉토리 → 해당 스킬 자동 호출 (.tsx→frontend, auth/→security)
+3. 코드 수정 후 → ccpp:review 필수 호출 (hooks가 매번 리마인드)
+4. 리뷰 후 → 기능 md 변경이력 테이블에 기록 (hooks가 매번 리마인드)
+5. 빌드 실패 → ccpp:build-fix 자동 호출
+```
+
+---
+
+## 주의사항
+
+- 이미 CLAUDE.md가 있으면 덮어쓰지 않고 "MANDATORY WORKFLOW" 섹션만 추가
+- 이미 `.claude/settings.json`이 있으면 기존 내용 보존하고 hooks만 병합
+- docs/ 기존 파일은 보존하고 새 파일만 추가
+- 기능 md는 코드를 실제로 Read해서 내용을 채운다 (빈 템플릿 금지)
+- 프로젝트 언어에 따라 빌드 명령, 파일 확장자 라우팅을 자동 조정
+
+---
+
+## 사용법
+
+```
+/harness-init
+```

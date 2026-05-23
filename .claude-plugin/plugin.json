@@ -1,0 +1,21 @@
+{
+  "name": "harness-init",
+  "description": "Agentic harness bootstrap for any project. Enforces mandatory workflow, file-based skill routing, auto code review, change history tracking, and project hooks.",
+  "version": "1.0.0",
+  "author": {
+    "name": "ohjunho421"
+  },
+  "homepage": "https://github.com/ohjunho421/harness-init",
+  "repository": "https://github.com/ohjunho421/harness-init",
+  "license": "MIT",
+  "keywords": [
+    "harness",
+    "workflow",
+    "code-review",
+    "agentic",
+    "documentation",
+    "hooks",
+    "skill-routing"
+  ],
+  "skills": "./skills/"
+}
