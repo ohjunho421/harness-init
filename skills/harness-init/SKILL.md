@@ -94,7 +94,106 @@ Q3: 절대 보존해야 할 기능이나 주의사항
 
 **금지: 이 단계를 건너뛰고 바로 Edit/Write를 사용하는 행위**
 
-### STEP 2: 계획 (3파일 이상 수정 시)
+### STEP 2: 요청 분석 → 스킬 선행 호출 (코드 작성 전)
+
+사용자 요청의 키워드를 확인하고, 아래 매핑에 해당하면 코드를 작성하기 전에 해당 스킬을 먼저 호출한다.
+이 단계의 목적: 적합한 패턴/설계 가이드를 먼저 로딩하여 더 좋은 코드를 작성하기 위함.
+
+#### 프론트엔드/UI
+
+| 요청 키워드 | 선행 호출 스킬 | 용도 |
+|-------------|---------------|------|
+| UI, 화면, 페이지, 컴포넌트, 디자인 | `Skill: skill="frontend-design:frontend-design"` | UI 설계 가이드 |
+| React, 리액트, 훅, 상태관리 | `Skill: skill="ccpp:react-patterns"` | React 19 패턴 |
+| Next.js, SSR, 라우팅 | `Skill: skill="ccpp:vercel-react-best-practices"` | Next.js 최적화 |
+| Tailwind, 스타일, CSS | `Skill: skill="ccpp:tailwind-design-system"` | 디자인 시스템 |
+| shadcn, 폼, 다이얼로그, 테이블 | `Skill: skill="ccpp:shadcn-ui"` | shadcn/ui 컴포넌트 |
+| 랜딩페이지, 프리미엄 UI | `Skill: skill="ccpp:ui-ux-pro-max"` | 빅테크 스타일 UI |
+
+#### 백엔드/API
+
+| 요청 키워드 | 선행 호출 스킬 | 용도 |
+|-------------|---------------|------|
+| API, 엔드포인트, REST, GraphQL | `Skill: skill="ccpp:api-design-principles"` | API 설계 원칙 |
+| FastAPI, 파이썬 서버 | `Skill: skill="ccpp:fastapi-templates"` | FastAPI 템플릿 |
+| Django | `Skill: skill="everything-claude-code:django-patterns"` | Django 패턴 |
+| Spring Boot, 자바 백엔드 | `Skill: skill="everything-claude-code:springboot-patterns"` | Spring Boot 패턴 |
+| 비동기, async, 동시성 | `Skill: skill="ccpp:async-python-patterns"` | 비동기 패턴 |
+
+#### 보안/인증
+
+| 요청 키워드 | 선행 호출 스킬 | 용도 |
+|-------------|---------------|------|
+| 로그인, 인증, OAuth, JWT, 세션 | `Skill: skill="everything-claude-code:security-review"` | 보안 체크리스트 |
+| 결제, 주문, 트랜잭션, 민감 데이터 | `Skill: skill="everything-claude-code:security-review"` | 보안 패턴 |
+
+#### 데이터베이스
+
+| 요청 키워드 | 선행 호출 스킬 | 용도 |
+|-------------|---------------|------|
+| DB, 데이터베이스, 스키마, 마이그레이션 | `Skill: skill="everything-claude-code:database-migrations"` | DB 마이그레이션 |
+| PostgreSQL, SQL, 쿼리 최적화 | `Skill: skill="everything-claude-code:postgres-patterns"` | PostgreSQL 패턴 |
+
+#### 테스트
+
+| 요청 키워드 | 선행 호출 스킬 | 용도 |
+|-------------|---------------|------|
+| 테스트, TDD, 테스트 먼저 | `Skill: skill="ccpp:tdd"` | TDD 워크플로우 |
+| E2E, 브라우저 테스트, Playwright | `Skill: skill="everything-claude-code:e2e-testing"` | E2E 테스트 |
+| pytest, 파이썬 테스트 | `Skill: skill="ccpp:python-testing-patterns"` | pytest 패턴 |
+
+#### DevOps/배포
+
+| 요청 키워드 | 선행 호출 스킬 | 용도 |
+|-------------|---------------|------|
+| Docker, 컨테이너, 도커 | `Skill: skill="everything-claude-code:docker-patterns"` | Docker 패턴 |
+| 배포, CI/CD, 파이프라인 | `Skill: skill="everything-claude-code:deployment-patterns"` | 배포 전략 |
+
+#### 언어별 패턴
+
+| 요청 키워드 | 선행 호출 스킬 | 용도 |
+|-------------|---------------|------|
+| Python, 파이썬 | `Skill: skill="everything-claude-code:python-patterns"` | Python 패턴 |
+| Go, 고랭 | `Skill: skill="everything-claude-code:golang-patterns"` | Go 패턴 |
+| Rust, 러스트 | `Skill: skill="everything-claude-code:rust-patterns"` | Rust 패턴 |
+| Kotlin, 코틀린 | `Skill: skill="everything-claude-code:kotlin-patterns"` | Kotlin 패턴 |
+| TypeScript 타입, 제네릭 | `Skill: skill="ccpp:typescript-advanced-types"` | TS 고급 타입 |
+
+#### 리서치/문서
+
+| 요청 키워드 | 선행 호출 스킬 | 용도 |
+|-------------|---------------|------|
+| 라이브러리 사용법, 문서 확인 | context7 MCP: `mcp__context7__resolve-library-id` → `mcp__context7__query-docs` | 최신 문서 조회 |
+| 조사, 리서치, 분석 | `Skill: skill="everything-claude-code:deep-research"` | 웹 리서치 |
+
+#### 코드 품질/리팩토링
+
+| 요청 키워드 | 선행 호출 스킬 | 용도 |
+|-------------|---------------|------|
+| 리팩토링, 단순화, 정리 | `Skill: skill="ccpp:simplify"` | 코드 단순화 |
+| 기술부채, 정리, 클린업 | `Skill: skill="ccpp:techdebt"` 또는 `Skill: skill="everything-claude-code:prune"` | 기술 부채 정리 |
+
+#### 모바일
+
+| 요청 키워드 | 선행 호출 스킬 | 용도 |
+|-------------|---------------|------|
+| Android, 안드로이드 | `Skill: skill="everything-claude-code:android-clean-architecture"` | Android 아키텍처 |
+| SwiftUI, iOS | `Skill: skill="everything-claude-code:swiftui-patterns"` | SwiftUI 패턴 |
+| Flutter, Dart | `Skill: skill="everything-claude-code:flutter-dart-code-review"` | Flutter 리뷰 |
+
+#### 미디어/콘텐츠
+
+| 요청 키워드 | 선행 호출 스킬 | 용도 |
+|-------------|---------------|------|
+| 이미지 생성, 썸네일, 아이콘 | `Skill: skill="ccpp:nano-banana"` | 이미지 생성 |
+| 프레젠테이션, PPT, 슬라이드 | `Skill: skill="everything-claude-code:frontend-slides"` | HTML 슬라이드 |
+| 글쓰기, 블로그, 아티클 | `Skill: skill="everything-claude-code:article-writing"` | 글 작성 |
+
+> **복수 매칭 시**: 해당하는 스킬을 모두 호출한다. 예: "React 로그인 페이지" → `react-patterns` + `security-review` + `frontend-design`
+
+**금지: 매칭되는 키워드가 있는데 스킬을 호출하지 않는 행위**
+
+### STEP 3: 계획 (3파일 이상 수정 시)
 
 수정 대상 파일이 3개 이상이면 반드시:
 ```
@@ -102,7 +201,7 @@ Skill 도구 호출: skill="ccpp:plan"
 ```
 1~2파일이면 직접 진행.
 
-### STEP 3: 구현 — 파일 기반 스킬 자동 호출
+### STEP 4: 구현 — 파일 기반 스킬 자동 호출
 
 수정하는 파일의 확장자와 디렉토리를 확인하고, 아래 조건에 해당하면 반드시 해당 스킬을 먼저 호출한다:
 
@@ -131,7 +230,7 @@ Skill 도구 호출: skill="ccpp:plan"
 
 **금지: 위 조건에 해당하는데 스킬을 호출하지 않는 행위**
 
-### STEP 4: 코드 리뷰 (코드 수정 후, 커밋 전) — MUST
+### STEP 5: 코드 리뷰 (코드 수정 후, 커밋 전) — MUST
 
 코드를 1줄이라도 수정했으면, 커밋 전에 반드시 아래를 실행한다:
 
@@ -146,7 +245,7 @@ Skill 도구 호출: skill="ccpp:review"
 
 **금지: 리뷰 없이 커밋하는 행위**
 
-### STEP 5: 빌드 확인
+### STEP 6: 빌드 확인
 
 ```bash
 {프로젝트 빌드 명령}
@@ -154,7 +253,7 @@ Skill 도구 호출: skill="ccpp:review"
 
 빌드 실패 시: `Skill: skill="ccpp:build-fix"` 호출
 
-### STEP 6: 문서 기록 (변경이력 필수 작성)
+### STEP 7: 문서 기록 (변경이력 필수 작성)
 
 코드를 수정했으면 반드시 아래를 모두 수행한다:
 
@@ -183,7 +282,7 @@ Skill 도구 호출: skill="ccpp:review"
 
 **금지: 코드만 수정하고 문서를 업데이트하지 않는 행위**
 
-### STEP 7: 커밋
+### STEP 8: 커밋
 
 {사용자 커밋 방식}
 
@@ -244,7 +343,7 @@ Skill 도구 호출: skill="ccpp:review"
     "UserPromptSubmit": [
       {
         "type": "command",
-        "command": "echo [HARNESS] 필수 워크플로우: 1)docs/00-INDEX.md Read 2)관련 기능 md Read 3)파일확장자 기반 스킬 호출 4)구현 5)Skill ccpp:review 필수 6)빌드 확인 7)기능 md 변경이력 기록. 건너뛰기 금지."
+        "command": "echo [HARNESS] 필수 8단계: 1)docs Read 2)요청 키워드→스킬 선행 호출 3)계획 4)구현(파일 기반 스킬) 5)ccpp:review 필수 6)빌드 확인 7)기능 md 변경이력 기록 8)커밋. 건너뛰기 금지."
       }
     ],
     "PreToolUse": [
@@ -253,7 +352,7 @@ Skill 도구 호출: skill="ccpp:review"
         "hooks": [
           {
             "type": "command",
-            "command": "echo [HARNESS-CHECK] 이 파일을 수정하기 전에: 1)docs/00-INDEX.md를 Read했는가? 2)관련 기능 md를 Read했는가? 3)파일 확장자/디렉토리에 맞는 스킬을 호출했는가? 하나라도 안 했으면 먼저 수행하세요."
+            "command": "echo [HARNESS-CHECK] 코드 수정 전: 1)docs/00-INDEX.md Read했는가? 2)관련 기능 md Read했는가? 3)요청 키워드에 맞는 스킬을 선행 호출했는가? 하나라도 안 했으면 먼저 수행하세요."
           }
         ]
       }
@@ -371,7 +470,7 @@ last_modified: {오늘 날짜}
 
 # 코드 리뷰 체크리스트
 
-> CLAUDE.md STEP 4에서 ccpp:review 호출 시 이 파일도 함께 Read한다.
+> CLAUDE.md STEP 5에서 ccpp:review 호출 시 이 파일도 함께 Read한다.
 
 ## 필수 확인 항목
 
@@ -389,7 +488,7 @@ last_modified: {오늘 날짜}
 | {오늘} | 프로젝트 초기 세팅 | - | 하네스 init 완료 |
 
 > 리뷰에서 발견한 반복 패턴이나 버그 원인을 여기에 추가한다.
-> CLAUDE.md STEP 6-4 참고.
+> CLAUDE.md STEP 7-4 참고.
 ```
 
 ---
@@ -413,7 +512,7 @@ last_modified: {오늘 날짜}
 하네스 v3 세팅 완료!
 
 생성된 파일:
-- CLAUDE.md — 강제 7단계 워크플로우 + 파일확장자 기반 스킬 라우팅
+- CLAUDE.md — 강제 8단계 워크플로우 + 요청 키워드 스킬 라우팅 + 파일확장자 라우팅
 - .claude/settings.json — 프로젝트 hooks (3종 리마인더)
 - docs/00-INDEX.md — 기능→문서 매핑 (초기 데이터 포함)
 - docs/features/{기능별}.md — 구조화된 기능 문서 (frontmatter + 변경이력)
@@ -421,10 +520,11 @@ last_modified: {오늘 날짜}
 
 강제되는 동작:
 1. 코드 수정 전 → 관련 기능 md를 Read (hooks가 매번 체크)
-2. 파일 확장자/디렉토리 → 해당 스킬 자동 호출 (.tsx→frontend, auth/→security)
-3. 코드 수정 후 → ccpp:review 필수 호출 (hooks가 매번 리마인드)
-4. 리뷰 후 → 기능 md 변경이력 테이블에 기록 (hooks가 매번 리마인드)
-5. 빌드 실패 → ccpp:build-fix 자동 호출
+2. 요청 키워드 분석 → 해당 스킬 선행 호출 (React→react-patterns, 인증→security-review 등)
+3. 파일 확장자/디렉토리 → 구현 시 스킬 자동 호출 (.tsx→frontend, auth/→security)
+4. 코드 수정 후 → ccpp:review 필수 호출 (hooks가 매번 리마인드)
+5. 리뷰 후 → 기능 md 변경이력 테이블에 기록 (hooks가 매번 리마인드)
+6. 빌드 실패 → ccpp:build-fix 자동 호출
 ```
 
 ---
