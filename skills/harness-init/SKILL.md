@@ -1,6 +1,6 @@
 ---
 name: harness-init
-description: 프로젝트에 강제 하네스를 설치합니다. 구조화된 기능 md 자동생성, 파일확장자 기반 스킬 라우팅, 변경이력 자동기록, 코드리뷰 자동트리거, hooks 리마인더를 포함합니다.
+description: 프로젝트에 강제 하네스를 설치합니다. 구조화된 기능 md 자동생성, 파일확장자 기반 스킬 라우팅, 변경이력 자동기록, 코드리뷰 자동트리거, script 기반 hooks 강제 게이트(컨텍스트 주입 + 미검증 커밋 차단)를 포함합니다.
 user-invocable: true
 ---
 
@@ -14,7 +14,7 @@ user-invocable: true
 | 2 | 수정 내용 기록 안 함 | 구체적 기록 형식 템플릿 + STEP에서 정확한 기록 위치/포맷 지정 |
 | 3 | md가 Claude 비친화적 | frontmatter + 고정 필드 + 짧은 구조화 블록 |
 | 4 | 스킬/플러그인 안 씀 | 파일 확장자/디렉토리 기반 자동 판단 규칙 |
-| 5 | 리뷰 안 함 | 코드 수정 후 Agent(code-reviewer) 호출을 MUST로 강제 |
+| 5 | 리뷰 안 함 | 코드 수정 후 ccpp:review MUST + 미검증 커밋을 hooks가 exit 2로 차단 |
 
 ---
 
@@ -332,10 +332,149 @@ Skill 도구 호출: skill="ccpp:review"
 
 ---
 
-### 생성 파일 2: .claude/settings.json (프로젝트 hooks)
+### 생성 파일 2: .claude/hooks/workflow-guard.cjs (강제 게이트 스크립트)
+
+> **왜 echo가 아니라 스크립트인가:**
+> Claude Code의 PreToolUse/PostToolUse 훅은 exit 0으로 끝나면 stdout이
+> **모델 컨텍스트에 주입되지 않는다**(트랜스크립트에만 남음). 그래서 기존
+> `echo [HARNESS...]` 훅은 모델이 읽지 못해 사실상 무력했다.
+> 실제로 강제하려면:
+> - 컨텍스트 주입: stdout에 `{"hookSpecificOutput":{"hookEventName":...,"additionalContext":...}}` JSON 출력
+> - 차단: exit code 2 + stderr (모델이 읽고 멈춤)
+>
+> 이 스크립트는 코드 수정 시 STEP 리마인더를 컨텍스트에 주입하고,
+> 검증(리뷰+빌드+문서)이 끝나지 않은 상태의 `git commit`을 exit 2로 차단한다.
+
+> 프로젝트 루트의 `.claude/hooks/workflow-guard.cjs`로 생성한다.
+> `isCodeFile`의 소스 디렉토리/확장자는 프로젝트 언어에 맞게 조정한다.
+
+```javascript
+#!/usr/bin/env node
+/**
+ * 하네스 워크플로우 가드 (CLAUDE.md MANDATORY WORKFLOW 강제)
+ *
+ * echo 훅은 PreToolUse/PostToolUse exit-0 stdout이 모델 컨텍스트로
+ * 주입되지 않아 무력했음. 이 스크립트는:
+ *  - pre-edit  : 코드 수정 전 STEP1-2 리마인더를 additionalContext로 주입(비차단)
+ *  - post-edit : 코드 수정 후 STEP5-7 리마인더 주입 + 검증 플래그 무효화
+ *  - pre-bash  : git commit 시 코드 수정됐는데 검증 미완료면 exit 2로 차단
+ *  - verify    : 리뷰/빌드/문서 완료를 수동 선언(검증 플래그 생성)
+ *  - reset     : 커밋 성공 후 플래그 정리
+ */
+const fs = require('fs');
+const path = require('path');
+
+const mode = process.argv[2] || '';
+const PROJECT = path.resolve(__dirname, '..', '..');
+const STATE_DIR = path.join(PROJECT, '.claude', '.workflow-state');
+const EDIT_FLAG = path.join(STATE_DIR, 'code-edited.flag');
+const VERIFIED = path.join(STATE_DIR, 'verified.flag');
+
+function ensureDir() { try { fs.mkdirSync(STATE_DIR, { recursive: true }); } catch (e) {} }
+function readStdin() { try { return fs.readFileSync(0, 'utf8'); } catch (e) { return ''; } }
+function parse(s) { try { return JSON.parse(s || '{}'); } catch (e) { return {}; } }
+
+// 프로젝트 언어/구조에 맞게 조정: 소스 디렉토리 + 코드 확장자만 코드 파일로 간주
+// (docs/*.md, 설정 파일은 제외하여 게이트 오발동 방지)
+function isCodeFile(p) {
+  if (!p) return false;
+  const n = p.replace(/\\/g, '/');
+  const inSrc = /\/(src|server|client|app|lib|pkg|internal|components|pages|services|routes|api|shared)\//.test(n);
+  const codeExt = /\.(ts|tsx|js|jsx|cjs|mjs|py|go|rs|java|kt|rb|php|c|cc|cpp|h|hpp|swift|vue|svelte)$/.test(n);
+  return inSrc && codeExt;
+}
+
+function inject(event, msg) {
+  process.stdout.write(JSON.stringify({
+    hookSpecificOutput: { hookEventName: event, additionalContext: msg }
+  }));
+}
+
+const data = parse(readStdin());
+const ti = data.tool_input || {};
+
+if (mode === 'pre-edit') {
+  const fp = ti.file_path || ti.path || '';
+  if (isCodeFile(fp)) {
+    ensureDir();
+    fs.writeFileSync(EDIT_FLAG, fp + '\n', { flag: 'a' });
+    inject('PreToolUse',
+      '[HARNESS STEP1-2] 코드 수정 감지. 확인: (1) docs/00-INDEX.md + 관련 features md를 Read했는가? ' +
+      '(2) 요청 키워드에 맞는 스킬을 선행 호출했는가? 안 했으면 지금 먼저 수행할 것.');
+  }
+  process.exit(0);
+}
+
+if (mode === 'post-edit') {
+  const fp = ti.file_path || ti.path || '';
+  if (isCodeFile(fp)) {
+    try { fs.unlinkSync(VERIFIED); } catch (e) {}
+    inject('PostToolUse',
+      '[HARNESS STEP5-7] 코드 수정됨. 커밋 전 필수: (1) Skill ccpp:review (2) 빌드 명령 통과 ' +
+      '(3) docs/features md 변경이력 기록. 완료 후 `node .claude/hooks/workflow-guard.cjs verify` 실행해야 커밋 가능.');
+  }
+  process.exit(0);
+}
+
+if (mode === 'pre-bash') {
+  const cmd = ti.command || '';
+  if (/\bgit\s+commit\b/.test(cmd)) {
+    const edited = fs.existsSync(EDIT_FLAG);
+    const verified = fs.existsSync(VERIFIED);
+    if (edited && !verified) {
+      let files = '';
+      try { files = fs.readFileSync(EDIT_FLAG, 'utf8').trim(); } catch (e) {}
+      process.stderr.write(
+        '[HARNESS GATE] 커밋 차단: 이번 세션 코드 수정 후 검증이 완료되지 않음.\n' +
+        '수정된 코드 파일:\n' + files + '\n\n' +
+        '커밋 전 반드시 완료:\n' +
+        '  1) Skill ccpp:review 리뷰 (CRITICAL/HIGH 수정)\n' +
+        '  2) 빌드 명령 통과\n' +
+        '  3) docs/features md 변경이력 기록\n\n' +
+        '위 3가지를 실제로 끝냈으면 다음을 실행한 뒤 다시 커밋:\n' +
+        '  node .claude/hooks/workflow-guard.cjs verify');
+      process.exit(2);
+    }
+  }
+  process.exit(0);
+}
+
+if (mode === 'post-bash') {
+  const cmd = ti.command || '';
+  if (/\bgit\s+commit\b/.test(cmd)) {
+    try { fs.unlinkSync(EDIT_FLAG); } catch (e) {}
+    try { fs.unlinkSync(VERIFIED); } catch (e) {}
+  }
+  process.exit(0);
+}
+
+if (mode === 'verify') {
+  ensureDir();
+  fs.writeFileSync(VERIFIED, new Date().toISOString());
+  process.stdout.write('[HARNESS] 검증 완료 표시됨. 이제 git commit 가능.');
+  process.exit(0);
+}
+
+if (mode === 'reset') {
+  try { fs.unlinkSync(EDIT_FLAG); } catch (e) {}
+  try { fs.unlinkSync(VERIFIED); } catch (e) {}
+  process.stdout.write('[HARNESS] 워크플로우 상태 초기화됨.');
+  process.exit(0);
+}
+
+process.exit(0);
+```
+
+> `.claude/.workflow-state/`는 런타임 플래그 디렉토리다. `.gitignore`에 추가 권장.
+
+---
+
+### 생성 파일 3: .claude/settings.json (프로젝트 hooks)
 
 > 프로젝트 루트의 `.claude/settings.json`에 hooks를 설치한다.
-> 이미 존재하면 hooks 키만 추가/병합한다.
+> 이미 존재하면 hooks 키만 추가/병합하되, **기존 echo 기반 Pre/PostToolUse 훅은
+> 무력하므로 아래 script 기반 훅으로 교체**한다.
+> UserPromptSubmit echo는 exit-0 stdout이 주입되므로 그대로 유효하다.
 
 ```json
 {
@@ -348,23 +487,29 @@ Skill 도구 호출: skill="ccpp:review"
     ],
     "PreToolUse": [
       {
-        "matcher": "Edit|Write",
+        "matcher": "Edit|Write|MultiEdit",
         "hooks": [
-          {
-            "type": "command",
-            "command": "echo [HARNESS-CHECK] 코드 수정 전: 1)docs/00-INDEX.md Read했는가? 2)관련 기능 md Read했는가? 3)요청 키워드에 맞는 스킬을 선행 호출했는가? 하나라도 안 했으면 먼저 수행하세요."
-          }
+          { "type": "command", "command": "node \".claude/hooks/workflow-guard.cjs\" pre-edit" }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "node \".claude/hooks/workflow-guard.cjs\" pre-bash" }
         ]
       }
     ],
     "PostToolUse": [
       {
-        "matcher": "Edit|Write",
+        "matcher": "Edit|Write|MultiEdit",
         "hooks": [
-          {
-            "type": "command",
-            "command": "echo [HARNESS-REMIND] 코드 수정됨. 모든 수정 완료 후 반드시: 1)Skill ccpp:review 호출 2)빌드 명령 실행 3)docs/features/{기능}.md 변경이력 테이블에 기록 추가. 이 3가지를 하지 않으면 작업 미완료."
-          }
+          { "type": "command", "command": "node \".claude/hooks/workflow-guard.cjs\" post-edit" }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "node \".claude/hooks/workflow-guard.cjs\" post-bash" }
         ]
       }
     ]
@@ -372,9 +517,15 @@ Skill 도구 호출: skill="ccpp:review"
 }
 ```
 
+**동작 요약:**
+- 코드 파일(`isCodeFile` 매칭) 수정 시 → STEP 리마인더가 모델 컨텍스트에 주입
+- 코드 수정 후 검증 안 한 채 `git commit` 시도 → **exit 2로 차단**
+- `node .claude/hooks/workflow-guard.cjs verify`로 리뷰+빌드+문서 완료 선언 후에만 커밋 가능
+- 커밋 성공(post-bash) 시 플래그 자동 정리
+
 ---
 
-### 생성 파일 3: docs/00-INDEX.md
+### 생성 파일 4: docs/00-INDEX.md
 
 ```markdown
 ---
@@ -417,7 +568,7 @@ docs/
 
 ---
 
-### 생성 파일 4: docs/features/{기능명}.md (기능별 — Q1에서 획득한 기능마다 1개씩)
+### 생성 파일 5: docs/features/{기능명}.md (기능별 — Q1에서 획득한 기능마다 1개씩)
 
 > Phase 1에서 분석한 코드를 기반으로 각 기능의 초기 문서를 생성한다.
 > 빈 파일 금지 — 최소한 핵심 파일 목록과 1줄 설명은 채운다.
@@ -460,7 +611,7 @@ tags: [{관련 키워드 쉼표 구분}]
 
 ---
 
-### 생성 파일 5: docs/code-review-checklist.md
+### 생성 파일 6: docs/code-review-checklist.md
 
 ```markdown
 ---
@@ -498,11 +649,16 @@ last_modified: {오늘 날짜}
 생성 후 반드시 아래를 확인한다:
 
 1. CLAUDE.md 존재 + "MANDATORY WORKFLOW" 섹션 포함 확인
-2. `.claude/settings.json` 존재 + hooks 3종 (UserPromptSubmit, PreToolUse, PostToolUse) 확인
-3. `docs/00-INDEX.md` 존재 + 매핑 테이블이 비어있지 않은지 확인
-4. `docs/features/*.md`가 Q1에서 받은 기능 수만큼 존재하는지 확인
-5. 각 기능 md의 `files:` 필드가 실제 존재하는 파일을 가리키는지 확인
-6. 빌드 명령 1회 실행하여 동작 확인
+2. `.claude/hooks/workflow-guard.cjs` 존재 확인 + 동작 테스트:
+   - `echo '{"tool_input":{"file_path":"src/x.ts"}}' | node .claude/hooks/workflow-guard.cjs pre-edit` → additionalContext JSON 출력되는지
+   - `echo '{"tool_input":{"command":"git commit -m x"}}' | node .claude/hooks/workflow-guard.cjs pre-bash` → (플래그 있을 때) exit 2 차단되는지
+   - 테스트 후 `node .claude/hooks/workflow-guard.cjs reset`으로 잔여 플래그 정리
+3. `.claude/settings.json` 존재 + hooks(UserPromptSubmit echo + Pre/PostToolUse script 기반) 확인
+4. `.gitignore`에 `.claude/.workflow-state/` 추가 확인
+5. `docs/00-INDEX.md` 존재 + 매핑 테이블이 비어있지 않은지 확인
+6. `docs/features/*.md`가 Q1에서 받은 기능 수만큼 존재하는지 확인
+7. 각 기능 md의 `files:` 필드가 실제 존재하는 파일을 가리키는지 확인
+8. 빌드 명령 1회 실행하여 동작 확인
 
 ---
 
@@ -513,18 +669,21 @@ last_modified: {오늘 날짜}
 
 생성된 파일:
 - CLAUDE.md — 강제 8단계 워크플로우 + 요청 키워드 스킬 라우팅 + 파일확장자 라우팅
-- .claude/settings.json — 프로젝트 hooks (3종 리마인더)
+- .claude/hooks/workflow-guard.cjs — 강제 게이트 스크립트 (컨텍스트 주입 + 커밋 차단)
+- .claude/settings.json — 프로젝트 hooks (script 기반)
 - docs/00-INDEX.md — 기능→문서 매핑 (초기 데이터 포함)
 - docs/features/{기능별}.md — 구조화된 기능 문서 (frontmatter + 변경이력)
 - docs/code-review-checklist.md — 리뷰 교훈 누적
 
 강제되는 동작:
-1. 코드 수정 전 → 관련 기능 md를 Read (hooks가 매번 체크)
+1. 코드 수정 전 → STEP1-2 리마인더가 모델 컨텍스트에 주입 (docs Read + 스킬 선행 호출 확인)
 2. 요청 키워드 분석 → 해당 스킬 선행 호출 (React→react-patterns, 인증→security-review 등)
 3. 파일 확장자/디렉토리 → 구현 시 스킬 자동 호출 (.tsx→frontend, auth/→security)
-4. 코드 수정 후 → ccpp:review 필수 호출 (hooks가 매번 리마인드)
-5. 리뷰 후 → 기능 md 변경이력 테이블에 기록 (hooks가 매번 리마인드)
+4. 코드 수정 후 → STEP5-7 리마인더 주입 (ccpp:review + 빌드 + 문서)
+5. 검증 안 하고 git commit 시도 → **exit 2로 차단** (verify 선언 전까지 커밋 불가)
 6. 빌드 실패 → ccpp:build-fix 자동 호출
+
+> echo 훅과 달리 이 게이트는 모델 컨텍스트에 실제로 주입/차단되어 무시할 수 없다.
 ```
 
 ---
@@ -532,7 +691,10 @@ last_modified: {오늘 날짜}
 ## 주의사항
 
 - 이미 CLAUDE.md가 있으면 덮어쓰지 않고 "MANDATORY WORKFLOW" 섹션만 추가
-- 이미 `.claude/settings.json`이 있으면 기존 내용 보존하고 hooks만 병합
+- 이미 `.claude/settings.json`이 있으면 기존 내용 보존하되, **무력한 echo 기반 Pre/PostToolUse 훅은 script 기반으로 교체**(echo는 exit-0 stdout이 모델 컨텍스트에 주입되지 않아 무효)
+- `.claude/hooks/workflow-guard.cjs`의 `isCodeFile` 소스 디렉토리/확장자는 프로젝트 언어에 맞게 조정
+- `.gitignore`에 `.claude/.workflow-state/` 추가 (런타임 플래그 디렉토리)
+- Node가 없는 프로젝트면 동일 로직을 해당 런타임(python 등)으로 포팅하거나, 최소한 UserPromptSubmit echo는 유지
 - docs/ 기존 파일은 보존하고 새 파일만 추가
 - 기능 md는 코드를 실제로 Read해서 내용을 채운다 (빈 템플릿 금지)
 - 프로젝트 언어에 따라 빌드 명령, 파일 확장자 라우팅을 자동 조정
